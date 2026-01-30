@@ -2,5 +2,5 @@ streamlit
 pandas
 google-generativeai
 thefuzz
-levenshtein
+python-Levenshtein
 Pillow
