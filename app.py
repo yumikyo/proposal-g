@@ -4,55 +4,57 @@ import google.generativeai as genai
 import json
 import os
 import re
-import base64
 import io
 from PIL import Image
 from thefuzz import process, fuzz
 
 # ----------------------------
-# 1. 初期設定 & Runwithデザイン
+# 1. デザイン設定（ハイコントラスト・ネイビー＆オレンジ）
 # ----------------------------
-st.set_page_config(page_title="Runwith Cost Analyzer", layout="wide", page_icon="📊")
+st.set_page_config(page_title="食材比較提案システム", layout="wide")
 
-# Runwith専用ハイコントラストデザイン
 st.markdown("""
 <style>
-    html, body, [class*="css"] { font-family: 'Helvetica Neue', sans-serif; }
+    html, body, [class*="css"] { font-family: 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif; }
+    
+    /* ボタンデザイン */
     .stButton>button { 
-        font-weight: bold; font-size: 18px; min-height: 60px; border-radius: 10px;
+        font-weight: bold; font-size: 20px; min-height: 65px; border-radius: 12px;
         background-color: #FF851B; color: #001F3F; border: 2px solid #001F3F;
     }
     .stButton>button:hover { background-color: #e67616; color: #FFFFFF; }
+
+    /* 入力項目ラベル */
     label { font-size: 18px !important; font-weight: bold !important; color: #FF851B !important; }
+
+    /* ヘッダー */
     .main-header {
         background: linear-gradient(135deg, #001F3F 0%, #003366 100%);
-        color: #FFFFFF; padding: 30px; border-radius: 20px; text-align: center;
-        margin-bottom: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        color: #FFFFFF; padding: 35px; border-radius: 15px; text-align: center;
+        margin-bottom: 30px; border-bottom: 5px solid #FF851B;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ----------------------------
-# 2. 関数定義（データ処理・AI）
+# 2. ロジック（データ読み込み・マッチング）
 # ----------------------------
 
 @st.cache_data
 def load_products():
-    """アクト商品データの読み込み"""
-    # ファイル名はシンプルに 'products.csv' を想定
     file_path = "products.csv"
     try:
         if not os.path.exists(file_path):
-            st.error(f"⚠️ '{file_path}' が見つかりません。GitHubにアップロードされているか確認してください。")
+            st.error(f"ファイル '{file_path}' が見つかりません。")
             return pd.DataFrame()
         
-        # 文字コード対応
+        # 文字コード対応（UTF-8 または Shift-JIS）
         try:
             df = pd.read_csv(file_path, encoding="utf-8-sig")
         except:
             df = pd.read_csv(file_path, encoding="shift-jis")
             
-        # アクト単価を数値化
+        # 単価データの数値化
         if "アクト単価" in df.columns:
             df["アクト単価"] = pd.to_numeric(df["アクト単価"], errors='coerce').fillna(0)
         return df
@@ -61,106 +63,94 @@ def load_products():
         return pd.DataFrame()
 
 def find_best_match(ingredient_name, master_df, threshold):
-    """曖昧マッチングによる自社商品特定"""
-    if master_df.empty or "商品名" not in master_df.columns:
+    if master_df.empty or "商品 name" not in master_df.columns and "商品名" not in master_df.columns:
         return None, 0
     
-    choices = master_df["商品名"].astype(str).tolist()
+    # 列名が「商品名」であることを前提とする
+    col_name = "商品名" if "商品名" in master_df.columns else master_df.columns[1]
+    choices = master_df[col_name].astype(str).tolist()
     best_match_name, score = process.extractOne(ingredient_name, choices, scorer=fuzz.partial_token_sort_ratio)
     
     if score >= threshold:
-        match_row = master_df[master_df["商品名"] == best_match_name].iloc[0]
+        match_row = master_df[master_df[col_name] == best_match_name].iloc[0]
         return match_row, score
     return None, 0
 
 # ----------------------------
-# 3. サイドバー（設定）
+# 3. サイドバー
 # ----------------------------
 with st.sidebar:
-    st.markdown("<div style='background:#001F3F;color:#FF851B;padding:20px;border-radius:15px;text-align:center;font-weight:bold;font-size:18px;'>Runwith Cost Analyzer</div>", unsafe_allow_html=True)
+    st.markdown("<div style='background:#001F3F;color:#FF851B;padding:15px;border-radius:10px;text-align:center;font-weight:bold;font-size:1.2em;'>提案ツール設定</div>", unsafe_allow_html=True)
     
-    st.header("🔧 システム設定")
+    st.header("🔑 認証")
     if "GEMINI_API_KEY" in st.secrets:
         api_key = st.secrets["GEMINI_API_KEY"]
-        st.success("✅ APIキー認証済み")
+        st.success("✅ 認証済み")
     else:
-        api_key = st.text_input("🔑 Gemini APIキー", type="password")
+        api_key = st.text_input("Gemini APIキーを入力", type="password")
     
     st.divider()
-    st.header("🎯 照合設定")
-    match_level = st.slider("マッチングの厳格度", 0, 100, 60, help="高いほど正確な一致を求めます")
-    
-    st.divider()
-    st.caption("© 2026 Runwith AI Consulting")
+    match_level = st.slider("マッチング感度", 0, 100, 60)
+    st.caption("食品卸売提案支援システム v2.1")
 
 # ----------------------------
-# 4. メインコンテンツ
+# 4. メイン画面
 # ----------------------------
 st.markdown("""
 <div class='main-header'>
-    <h1>📊 Runwith 商品比較提案ツール</h1>
-    <p style='font-size: 1.2em; color: #FF851B; font-weight: bold;'>
-        メニュー写真から使用材料を推測し、コスト削減案を自動作成します
+    <h1>🍴 新規開拓・食材比較提案システム</h1>
+    <p style='font-size: 1.1em; color: #FF851B; font-weight: bold;'>
+        メニュー解析からコスト削減シミュレーションを自動生成
     </p>
 </div>
 """, unsafe_allow_html=True)
 
-# ステップ1: お店情報
-st.markdown("### 🏪 1. 提案先情報")
-col1, col2 = st.columns(2)
-with col1:
-    client_name = st.text_input("🏠 店舗名", placeholder="例：新規開拓レストラン")
-with col2:
-    target_menu = st.text_input("📖 対象メニュー名", placeholder="例：看板パスタランチ")
+# 情報入力セクション
+st.markdown("### 📋 1. 提案・担当者情報")
+c1, c2, c3 = st.columns(3)
+with c1:
+    cust_name = st.text_input("お客様名（店舗名）", placeholder="〇〇レストラン 御中")
+with c2:
+    cust_contact = st.text_input("連絡先（電話/担当名）", placeholder="090-xxxx-xxxx / 担当：〇〇様")
+with c3:
+    staff_name = st.text_input("自社担当者名", placeholder="営業部：〇〇")
 
 st.divider()
 
-# ステップ2: 写真の登録
-st.markdown("### 📸 2. メニュー写真のアップロード")
-uploaded_file = st.file_uploader("メニューを撮影した画像を選択してください", type=['png', 'jpg', 'jpeg'])
+# 画像セクション
+st.markdown("### 📸 2. メニュー写真の解析")
+uploaded_file = st.file_uploader("撮影したメニュー写真をアップロード", type=['png', 'jpg', 'jpeg'])
 
 if uploaded_file:
     img = Image.open(uploaded_file)
-    st.image(img, caption="解析対象画像", width=400)
+    st.image(img, caption="解析対象", width=400)
 
-    # ステップ3: 解析実行
-    st.markdown("---")
-    if st.button("🚀 提案資料を生成する", type="primary", use_container_width=True):
+    if st.button("🔍 メニューを解析して提案を作成", type="primary", use_container_width=True):
         if not api_key:
-            st.error("Gemini APIキーを設定してください。")
-        elif not client_name:
-            st.warning("店舗名を入力してください。")
+            st.error("APIキーを設定してください。")
+        elif not cust_name:
+            st.warning("お客様名を入力してください。")
         else:
-            with st.spinner('Runwith AI が材料を分析し、アクト商品と照合中...'):
+            with st.spinner('AIが材料を推測し、自社マスタと照合中...'):
                 try:
-                    # AI設定
                     genai.configure(api_key=api_key)
                     model = genai.GenerativeModel('gemini-1.5-flash')
 
-                    # AIへの指示
                     prompt = """
-                    役割: 卸売業者の優秀な営業コンサルタント。
-                    指示: 画像のメニューから使われている主な材料を推測してください。
-                    出力フォーマット: 必ず以下のJSON形式のみで答えてください。
+                    メニュー写真から使われている主な材料を推測してください。
+                    必ず以下のJSON形式のみで回答してください。
                     {"materials": [{"name": "材料名", "market_price": 500, "qty": 1, "unit": "kg"}]}
-                    ※market_priceは一般的な市場単価（円）を想定してください。
+                    ※market_priceは競合他社の一般的な市場卸単価（円）の推測値です。
                     """
                     
                     response = model.generate_content([prompt, img])
+                    json_str = re.search(r'\[.*\]|\{.*\}', response.text, re.DOTALL).group()
+                    analysis_res = json.loads(json_str)
                     
-                    # JSONの抽出
-                    json_match = re.search(r'\[.*\]|\{.*\}', response.text, re.DOTALL)
-                    if not json_match:
-                        raise Exception("AIの解析結果が正しく取得できませんでした。")
-                    
-                    analysis_res = json.loads(json_match.group())
                     master_df = load_products()
-                    
-                    # 照合ロジック
                     proposal_data = []
-                    materials_list = analysis_res.get("materials", [])
                     
-                    for item in materials_list:
+                    for item in analysis_res.get("materials", []):
                         match, score = find_best_match(item["name"], master_df, match_level)
                         
                         proposal_data.append({
@@ -173,45 +163,48 @@ if uploaded_file:
                             "単位\n(Unit)": match["［単位］"] if match is not None else item["unit"]
                         })
 
-                    # 結果の表示
                     if proposal_data:
-                        st.session_state.proposal_result = pd.DataFrame(proposal_data)
-                        st.success("✨ 提案資料のベースが完成しました！")
+                        st.session_state.p_result = pd.DataFrame(proposal_data)
+                        st.success("✅ 比較表が完成しました")
                     else:
-                        st.warning("材料を特定できませんでした。別の写真を試してください。")
+                        st.warning("材料を特定できませんでした。")
 
                 except Exception as e:
                     st.error(f"解析エラー: {e}")
 
-# 結果の表示と編集
-if 'proposal_result' in st.session_state:
-    st.markdown("### 📊 3. 提案比較表")
-    st.info("💡 表の中身は直接編集できます。実際の商談に合わせて調整してください。")
+# 結果表示セクション
+if 'p_result' in st.session_state:
+    st.markdown("### 📊 3. コスト比較提案表")
+    st.info(f"宛先：{cust_name} 様　／　連絡先：{cust_contact}　／　担当者：{staff_name}")
     
-    # データエディタ
-    edited_df = st.data_editor(st.session_state.proposal_result, use_container_width=True, num_rows="dynamic")
+    # 編集可能な表
+    edited_df = st.data_editor(st.session_state.p_result, use_container_width=True, num_rows="dynamic")
     
-    # 計算処理
-    m_total = (edited_df["推定市場単価\n(Market Price)"].astype(float) * edited_df["数量\n(Qty)"].astype(float)).sum()
-    o_total = (edited_df["自社単価\n(Our Price)"].astype(float) * edited_df["数量\n(Qty)"].astype(float)).sum()
-    diff = m_total - o_total
+    # 合計額の算出
+    m_sum = (edited_df["推定市場単価\n(Market Price)"].astype(float) * edited_df["数量\n(Qty)"].astype(float)).sum()
+    o_sum = (edited_df["自社単価\n(Our Price)"].astype(float) * edited_df["数量\n(Qty)"].astype(float)).sum()
+    diff = m_sum - o_sum
     
-    # コスト削減額の表示（Runwithカラー）
-    c1, c2, c3 = st.columns(3)
-    c1.metric("推定市場コスト総額", f"¥{m_total:,.0f}")
-    c2.metric("アクト切り替え後の総額", f"¥{o_total:,.0f}")
-    c3.metric("コスト削減見込", f"¥{diff:,.0f}", delta=float(diff))
+    # 削減効果の表示
+    col1, col2, col3 = st.columns(3)
+    col1.metric("推定市場総額", f"¥{m_sum:,.0f}")
+    col2.metric("自社切り替え総額", f"¥{o_sum:,.0f}")
+    col3.metric("月間削減見込額", f"¥{diff:,.0f}", delta=float(diff))
 
-    # ダウンロード
     st.divider()
-    csv = edited_df.to_csv(index=False).encode('utf-8-sig')
+    
+    # CSVダウンロード（ヘッダーに情報を付与）
+    csv_body = edited_df.to_csv(index=False)
+    header_info = f"お客様名,{cust_name}\n連絡先,{cust_contact}\n自社担当者,{staff_name}\n\n"
+    full_csv = (header_info + csv_body).encode('utf-8-sig')
+    
     st.download_button(
-        label="📥 提案用CSVデータをダウンロード",
-        data=csv,
-        file_name=f"Runwith_Proposal_{client_name}.csv",
+        label="📥 提案用CSVファイルをダウンロード",
+        data=full_csv,
+        file_name=f"提案書_{cust_name}.csv",
         mime="text/csv",
         use_container_width=True
     )
 
 st.markdown("---")
-st.caption("Developed by Runwith AI System - Supporting Your Sales Excellence.")
+st.caption("食品卸売支援システム - 現場の営業活動をAIで加速させます。")
